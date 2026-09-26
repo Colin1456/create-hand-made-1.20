@@ -7,7 +7,7 @@
   ],
   "key": {
     "i": { "tag": "c:plates/iron" },
-    "p": { "item": "minecraft:planks" }
+    "p": { "tag": "minecraft:planks" }
   },
   "result": {
     "id": "create_hand_made:hand_saw",
