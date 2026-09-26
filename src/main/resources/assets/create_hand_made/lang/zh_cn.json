@@ -67,6 +67,7 @@
   "item.create_hand_made.hand_saw.tooltip.condition4": "潜行+右键点击时",
   "item.create_hand_made.hand_saw.tooltip.behaviour4": "切换_切削配方_",
 
+
   "jei.create_hand_made.hand_saw": "手锯切削",
   "jei.create_hand_made.hand_press_depot": "冲压锤压印",
   "jei.create_hand_made.hand_press_basin": "冲压锤成型",
@@ -74,6 +75,9 @@
   "jei.create_hand_made.mortar_milling": "研钵研磨",
   "jei.create_hand_made.crusher_mortar_crushing": "碾钵粉碎",
   "jei.create_hand_made.stirring_staff_mixing": "搅拌杖混合",
+  "jei.create_hand_made.hand_press_basin_auto_square": "冲压锤压缩",
+  "jei.create_hand_made.stirring_staff_auto_shapeless": "搅拌杖无序合成",
+  "jei.create_hand_made.stirring_staff_auto_brewing": "搅拌杖酿造",
   "jei.create_hand_made.pointer_application": "指杆应用",
   "jei.create_hand_made.bellows_blasting": "风箱熔炼",
   "jei.create_hand_made.bellows_smoking": "风箱烟熏",

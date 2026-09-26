@@ -22,6 +22,7 @@ import com.simibubi.create.compat.jei.DoubleItemIcon;
 import com.simibubi.create.compat.jei.EmptyBackground;
 import com.simibubi.create.compat.jei.category.CreateRecipeCategory;
 import com.simibubi.create.compat.jei.category.SpoutCategory;
+import com.simibubi.create.content.fluids.potion.PotionMixingRecipes;
 import com.simibubi.create.content.fluids.transfer.FillingRecipe;
 import com.simibubi.create.content.kinetics.crafter.MechanicalCraftingRecipe;
 import com.simibubi.create.content.kinetics.crusher.CrushingRecipe;
@@ -34,6 +35,7 @@ import com.simibubi.create.content.kinetics.press.MechanicalPressBlockEntity;
 import com.simibubi.create.content.kinetics.press.PressingRecipe;
 import com.simibubi.create.content.kinetics.saw.CuttingRecipe;
 import com.simibubi.create.content.processing.basin.BasinRecipe;
+import com.simibubi.create.foundation.utility.RecipeGenericsUtil;
 import com.simibubi.create.infrastructure.config.AllConfigs;
 import mezz.jei.api.IModPlugin;
 import mezz.jei.api.JeiPlugin;
@@ -46,10 +48,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.item.crafting.AbstractCookingRecipe;
-import net.minecraft.world.item.crafting.CraftingRecipe;
-import net.minecraft.world.item.crafting.RecipeHolder;
-import net.minecraft.world.item.crafting.RecipeType;
+import net.minecraft.world.item.crafting.*;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -97,7 +96,7 @@ public class CreateHandMadeJEI implements IModPlugin {
         );
         allCategories.add(new HandPressDepotCategory(handPressDepotInfo));
 
-        // ==================== 冲压锤 · 工作盆 ====================
+        // ==================== 冲压锤 · 工作盆（打包） ====================
         CreateRecipeCategory.Info<BasinRecipe> handPressBasinInfo = new CreateRecipeCategory.Info<>(
                 ModJeiTypes.HAND_PRESS_BASIN,
                 Component.translatable("jei.create_hand_made.hand_press_basin"),
@@ -108,7 +107,20 @@ public class CreateHandMadeJEI implements IModPlugin {
                 CreateHandMadeJEI::collectCompactingRecipes,
                 List.of(() -> new ItemStack(ModItems.PRESS_HAMMER.get()))
         );
-        allCategories.add(new HandPressBasinCategory(handPressBasinInfo));
+        allCategories.add(HandPressBasinCategory.standard(handPressBasinInfo));
+
+// ==================== 冲压锤 · 工作盆（自动摆放 4/9 合 1） ★ 新增 ====================
+        CreateRecipeCategory.Info<BasinRecipe> handPressBasinAutoSquareInfo = new CreateRecipeCategory.Info<>(
+                ModJeiTypes.HAND_PRESS_BASIN_AUTO_SQUARE,
+                Component.translatable("jei.create_hand_made.hand_press_basin_auto_square"),
+                new EmptyBackground(177, 85),
+                new DoubleItemIcon(
+                        () -> new ItemStack(ModItems.PRESS_HAMMER.get()),
+                        () -> new ItemStack(Items.CRAFTING_TABLE)),
+                CreateHandMadeJEI::collectAutoSquareRecipes,
+                List.of(() -> new ItemStack(ModItems.PRESS_HAMMER.get()))
+        );
+        allCategories.add(HandPressBasinCategory.autoSquare(handPressBasinAutoSquareInfo));
 
         // ==================== 灌注枪 · 注液 ====================
         CreateRecipeCategory.Info<FillingRecipe> handInfusionGunInfo = new CreateRecipeCategory.Info<>(
@@ -160,7 +172,33 @@ public class CreateHandMadeJEI implements IModPlugin {
                 CreateHandMadeJEI::collectMixingRecipes,
                 List.of(() -> new ItemStack(ModItems.STIRRING_STAFF.get()))
         );
-        allCategories.add(new StirringStaffMixingCategory(stirringStaffInfo));
+        allCategories.add(StirringStaffMixingCategory.standard(stirringStaffInfo));
+
+// ==================== 搅拌杖 · 自动无序合成 ★ 新增 ====================
+        CreateRecipeCategory.Info<BasinRecipe> stirringStaffAutoShapelessInfo = new CreateRecipeCategory.Info<>(
+                ModJeiTypes.STIRRING_STAFF_AUTO_SHAPELESS,
+                Component.translatable("jei.create_hand_made.stirring_staff_auto_shapeless"),
+                new EmptyBackground(177, 85),
+                new DoubleItemIcon(
+                        () -> new ItemStack(ModItems.STIRRING_STAFF.get()),
+                        () -> new ItemStack(Items.CRAFTING_TABLE)),
+                CreateHandMadeJEI::collectAutoShapelessRecipes,
+                List.of(() -> new ItemStack(ModItems.STIRRING_STAFF.get()))
+        );
+        allCategories.add(StirringStaffMixingCategory.autoShapeless(stirringStaffAutoShapelessInfo));
+
+// ==================== 搅拌杖 · 自动酿造 ★ 新增 ====================
+        CreateRecipeCategory.Info<BasinRecipe> stirringStaffAutoBrewingInfo = new CreateRecipeCategory.Info<>(
+                ModJeiTypes.STIRRING_STAFF_AUTO_BREWING,
+                Component.translatable("jei.create_hand_made.stirring_staff_auto_brewing"),
+                new EmptyBackground(177, 103),
+                new DoubleItemIcon(
+                        () -> new ItemStack(ModItems.STIRRING_STAFF.get()),
+                        () -> new ItemStack(Items.BREWING_STAND)),
+                CreateHandMadeJEI::collectAutoBrewingRecipes,
+                List.of(() -> new ItemStack(ModItems.STIRRING_STAFF.get()))
+        );
+        allCategories.add(StirringStaffMixingCategory.autoBrewing(stirringStaffAutoBrewingInfo));
 
         // ==================== 指杆 · 应用（部署 + 物品应用） ====================
         CreateRecipeCategory.Info<ItemApplicationRecipe> pointerApplicationInfo = new CreateRecipeCategory.Info<>(
@@ -270,23 +308,26 @@ public class CreateHandMadeJEI implements IModPlugin {
     }
 
     /**
-     * 冲压锤 · 工作盆。
-     * 包含：
-     *  - COMPACTING 类型配方（打包：如 4合1、9合1 的 CompactingRecipe）
-     *  - 可压缩的 CraftingRecipe（4合1 / 9合1 的普通合成配方，参考 CreateJEI.autoSquare）
+     * 冲压锤 · 工作盆 · 打包。
+     * 只收集 COMPACTING 类型配方。
      */
     private static List<RecipeHolder<BasinRecipe>> collectCompactingRecipes() {
         List<RecipeHolder<BasinRecipe>> result = new ArrayList<>();
-
-        // 1. COMPACTING 类型
         List<RecipeHolder<?>> compacting = CreateJEI.getTypedRecipes(AllRecipeTypes.COMPACTING.getType());
         for (RecipeHolder<?> h : compacting) {
             if (h.value() instanceof BasinRecipe b) {
                 result.add(new RecipeHolder<>(h.id(), b));
             }
         }
+        return result;
+    }
+    /**
+     * 冲压锤 · 工作盆 · 自动摆放（4/9 合 1）。
+     * 收集可压缩的 CraftingRecipe（4 或 9 个同类材料）。
+     */
+    private static List<RecipeHolder<BasinRecipe>> collectAutoSquareRecipes() {
+        List<RecipeHolder<BasinRecipe>> result = new ArrayList<>();
 
-        // 2. 可压缩的 CraftingRecipe（对应 CreateJEI 的 autoSquare 分类）
         if (!AllConfigs.server().recipes.allowShapedSquareInPress.get()) {
             return result;
         }
@@ -351,6 +392,50 @@ public class CreateHandMadeJEI implements IModPlugin {
                 result.add(new RecipeHolder<>(h.id(), b));
             }
         }
+        return result;
+    }
+    /**
+     * 搅拌杖 · 自动无序合成。
+     * 收集无序的 CraftingRecipe（非 4/9 合 1、非 Shaped）。
+     */
+    private static List<RecipeHolder<BasinRecipe>> collectAutoShapelessRecipes() {
+        List<RecipeHolder<BasinRecipe>> result = new ArrayList<>();
+
+        if (!AllConfigs.server().recipes.allowShapelessInMixer.get()) {
+            return result;
+        }
+
+        List<RecipeHolder<?>> crafting = CreateJEI.getTypedRecipes(RecipeType.CRAFTING);
+        for (RecipeHolder<?> h : crafting) {
+            if (!(h.value() instanceof CraftingRecipe cr)) continue;
+            if (cr instanceof ShapedRecipe) continue;
+            if (cr.getIngredients().size() <= 1) continue;
+            if (MechanicalPressBlockEntity.canCompress(cr)) continue;
+            if (AllRecipeTypes.shouldIgnoreInAutomation(h)) continue;
+
+            result.add(BasinRecipe.convertShapeless(h));
+        }
+
+        return result;
+    }
+    /**
+     * 搅拌杖 · 自动酿造。
+     * 收集 PotionMixingRecipes 生成的所有酿造配方。
+     * 用 RecipeGenericsUtil.cast 把 RecipeHolder<MixingRecipe> 包成 RecipeHolder<BasinRecipe>，
+     * 这样 BasinCategory 才能处理。
+     */
+    private static List<RecipeHolder<BasinRecipe>> collectAutoBrewingRecipes() {
+        List<RecipeHolder<BasinRecipe>> result = new ArrayList<>();
+
+        if (!AllConfigs.server().recipes.allowBrewingInMixer.get()) {
+            return result;
+        }
+
+        var level = Minecraft.getInstance().level;
+        if (level == null) return result;
+
+        // ★ 关键：cast 包装
+        result.addAll(RecipeGenericsUtil.cast(PotionMixingRecipes.createRecipes(level)));
         return result;
     }
 
