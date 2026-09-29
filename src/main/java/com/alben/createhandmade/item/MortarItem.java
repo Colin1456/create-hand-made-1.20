@@ -1,7 +1,8 @@
 package com.alben.createhandmade.item;
 
 import com.alben.createhandmade.ModDataComponents;
-import com.simibubi.create.AllRecipeTypes;
+import com.alben.createhandmade.recipe.HandMadeRecipePool;
+import com.alben.createhandmade.recipe.HandMadeTool;
 import com.simibubi.create.content.kinetics.millstone.MillingRecipe;
 import com.simibubi.create.foundation.item.CustomUseEffectsItem;
 import com.simibubi.create.foundation.item.render.SimpleCustomRenderer;
@@ -27,8 +28,8 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.client.extensions.common.IClientItemExtensions;
 
+import javax.annotation.Nullable;
 import java.util.List;
-import java.util.Optional;
 import java.util.function.Consumer;
 
 public class MortarItem extends Item implements CustomUseEffectsItem {
@@ -71,8 +72,7 @@ public class MortarItem extends Item implements CustomUseEffectsItem {
         }
 
         SingleRecipeInput recipeInput = new SingleRecipeInput(input);
-        Optional<RecipeHolder<MillingRecipe>> recipeOpt = AllRecipeTypes.MILLING.find(recipeInput, level);
-        if (recipeOpt.isEmpty()) {
+        if (findMillingRecipe(level, recipeInput) == null) {
             return InteractionResultHolder.fail(stack);
         }
 
@@ -109,9 +109,9 @@ public class MortarItem extends Item implements CustomUseEffectsItem {
         if (level.isClientSide) return stack;
 
         SingleRecipeInput recipeInput = new SingleRecipeInput(contents.stack());
-        Optional<RecipeHolder<MillingRecipe>> recipeOpt = AllRecipeTypes.MILLING.find(recipeInput, level);
-        if (recipeOpt.isPresent()) {
-            List<ItemStack> results = recipeOpt.get().value().rollResults(level.random);
+        RecipeHolder<?> recipe = findMillingRecipe(level, recipeInput);
+        if (recipe != null && recipe.value() instanceof MillingRecipe millingRecipe) {
+            List<ItemStack> results = millingRecipe.rollResults(level.random);
             for (ItemStack result : results) {
                 if (!result.isEmpty()) {
                     player.getInventory().placeItemBackInInventory(result);
@@ -193,6 +193,35 @@ public class MortarItem extends Item implements CustomUseEffectsItem {
                 }
             }
         }
+    }
+
+    // ================= 配方查找：走统一配方池 =================
+
+    /**
+     * 按统一配方池查找研磨配方。
+     *
+     * <p>重构前这里直接调 {@code AllRecipeTypes.MILLING.find(recipeInput, level)}，
+     * 它的实现是 {@code level.getRecipeManager().getRecipeFor(...)}，
+     * 语义等于「按配方管理器顺序找到第一条 {@code matches} 的 MILLING 配方」。</p>
+     *
+     * <p>现在改为遍历 {@link HandMadeRecipePool#getBaseRecipes}
+     * （{@link HandMadeTool#MORTAR}）并做同样的 {@code matches} 判定、取第一条，
+     * 数据来源与顺序都和改造前一致。匹配判定留在本类，配方池只负责收集候选。</p>
+     *
+     * @return 第一个匹配的研磨配方；没有则返回 null
+     */
+    @Nullable
+    private static RecipeHolder<?> findMillingRecipe(Level level, SingleRecipeInput recipeInput) {
+        // 用 instanceof 模式匹配取出确切的 MillingRecipe 再调 matches：
+        // holder.value() 的静态类型是 Recipe<?>，其 matches 的参数是通配符捕获，
+        // 无法直接接受 SingleRecipeInput。instanceof 能拿到确切类型，
+        // 因此既不需要 unchecked 强转，也不会在将来类型变化时静默出错。
+        for (RecipeHolder<?> holder : HandMadeRecipePool.getBaseRecipes(HandMadeTool.MORTAR, level)) {
+            if (!(holder.value() instanceof MillingRecipe millingRecipe)) continue;
+            if (!millingRecipe.matches(recipeInput, level)) continue;
+            return holder;
+        }
+        return null;
     }
 
     // ================= 渲染器 =================

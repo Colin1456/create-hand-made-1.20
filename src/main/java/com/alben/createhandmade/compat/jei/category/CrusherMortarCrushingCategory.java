@@ -2,7 +2,7 @@ package com.alben.createhandmade.compat.jei.category;
 
 import com.alben.createhandmade.item.ModItems;
 import com.simibubi.create.compat.jei.category.CreateRecipeCategory;
-import com.simibubi.create.content.kinetics.crusher.CrushingRecipe;
+import com.simibubi.create.content.kinetics.crusher.AbstractCrushingRecipe;
 import com.simibubi.create.content.processing.recipe.ProcessingOutput;
 import com.simibubi.create.foundation.gui.AllGuiTextures;
 import mezz.jei.api.gui.builder.IRecipeLayoutBuilder;
@@ -17,19 +17,26 @@ import net.minecraft.world.item.ItemStack;
 import javax.annotation.ParametersAreNonnullByDefault;
 import java.util.List;
 
+/**
+ * 碾钵 JEI 类别。
+ *
+ * <p>泛型用 {@link AbstractCrushingRecipe}（CRUSHING 与 MILLING 的共同父类），
+ * 所以本类别同时展示粉碎与研磨两种配方 —— 与游戏内碾钵「先粉碎、后研磨」一致。
+ * 类别显示名保持"碾钵粉碎"不变。</p>
+ */
 @ParametersAreNonnullByDefault
-public class CrusherMortarCrushingCategory extends CreateRecipeCategory<CrushingRecipe> {
+public class CrusherMortarCrushingCategory extends CreateRecipeCategory<AbstractCrushingRecipe> {
 
     /** 抖幅比研钵大一点（粉碎更重） */
     private static final float SHAKE_AMPLITUDE = 2f;
     private static final float SHAKE_SPEED = 0.4f;
 
-    public CrusherMortarCrushingCategory(Info<CrushingRecipe> info) {
+    public CrusherMortarCrushingCategory(Info<AbstractCrushingRecipe> info) {
         super(info);
     }
 
     @Override
-    public void setRecipe(IRecipeLayoutBuilder builder, CrushingRecipe recipe, IFocusGroup focuses) {
+    public void setRecipe(IRecipeLayoutBuilder builder, AbstractCrushingRecipe recipe, IFocusGroup focuses) {
         builder
                 .addSlot(RecipeIngredientRole.INPUT, 27, 37)
                 .setBackground(getRenderedSlot(), -1, -1)
@@ -52,7 +59,7 @@ public class CrusherMortarCrushingCategory extends CreateRecipeCategory<Crushing
     }
 
     @Override
-    public void draw(CrushingRecipe recipe, IRecipeSlotsView slotsView,
+    public void draw(AbstractCrushingRecipe recipe, IRecipeSlotsView slotsView,
                      GuiGraphics graphics, double mouseX, double mouseY) {
         AllGuiTextures.JEI_SHADOW.render(graphics, 61, 29);
         AllGuiTextures.JEI_LONG_ARROW.render(graphics, 52, 40);

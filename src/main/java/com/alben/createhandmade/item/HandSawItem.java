@@ -1,6 +1,8 @@
 package com.alben.createhandmade.item;
 
 import com.alben.createhandmade.ModDataComponents;
+import com.alben.createhandmade.recipe.HandMadeRecipePool;
+import com.alben.createhandmade.recipe.HandMadeTool;
 import com.simibubi.create.AllRecipeTypes;
 import com.simibubi.create.content.kinetics.saw.CuttingRecipe;
 import com.simibubi.create.content.kinetics.saw.SawBlockEntity;
@@ -29,7 +31,6 @@ import net.minecraft.world.item.UseAnim;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
-import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
@@ -370,9 +371,11 @@ public class HandSawItem extends Item {
                 SoundSource.PLAYERS, 0.7f, 1.2f);
     }
 
-    private static List<RecipeHolder<? extends Recipe<?>>> getCuttingRecipes(Level level, ItemStack input) {
+    public static List<RecipeHolder<? extends Recipe<?>>> getCuttingRecipes(Level level, ItemStack input) {
         if (input.isEmpty()) return List.of();
 
+        // ★ 序列组装不走配方池：它需要按「输入 + 中间物品」的组装进度解析，
+        //   不是一条普通的 CUTTING 配方，保持原样。
         Optional<RecipeHolder<CuttingRecipe>> assembly = SequencedAssemblyRecipe.getRecipe(
                 level, input, AllRecipeTypes.CUTTING.getType(), CuttingRecipe.class);
         if (assembly.isPresent()) {
@@ -385,13 +388,18 @@ public class HandSawItem extends Item {
         handler.setStackInSlot(0, input.copyWithCount(1));
         RecipeWrapper wrapper = new RecipeWrapper(handler);
 
-        RecipeType<CuttingRecipe> cuttingType = AllRecipeTypes.CUTTING.getType();
-
-        for (RecipeHolder<CuttingRecipe> holder : level.getRecipeManager().getAllRecipesFor(cuttingType)) {
-            if (!holder.value().matches(wrapper, level)) continue;
-            if (!AllRecipeTypes.shouldIgnoreInAutomation(holder)) {
-                result.add(holder);
-            }
+        // 候选集改由统一配方池提供；匹配判定仍在本类。
+        // 这里用 instanceof 取出具体的 CuttingRecipe 再调 matches：
+        // holder.value() 的静态类型是 Recipe<?>，其 matches 的参数是通配符捕获，
+        // 无法直接接受 RecipeWrapper，而 instanceof 模式匹配能拿到确切类型，
+        // 既不需要 unchecked 强转，也不会在将来类型变化时静默出错。
+        for (RecipeHolder<?> holder : HandMadeRecipePool.getBaseRecipes(HandMadeTool.HAND_SAW, level)) {
+            if (!(holder.value() instanceof CuttingRecipe cuttingRecipe)) continue;
+            if (!cuttingRecipe.matches(wrapper, level)) continue;
+            // ★ automation 过滤保留在调用方：配方池与 JEI 都不过滤这些"仅手动"配方，
+            //   只有游戏内的手锯需要排除它们，行为与改造前一致。
+            if (AllRecipeTypes.shouldIgnoreInAutomation(holder)) continue;
+            result.add(holder);
         }
 
         return result;
@@ -446,30 +454,19 @@ public class HandSawItem extends Item {
 
         List<RecipeHolder<? extends Recipe<?>>> recipes = getCuttingRecipes(level, off);
         if (recipes.isEmpty()) {
-            player.displayClientMessage(
-                    Component.translatable("item.create_hand_made.hand_saw.no_recipe")
-                            .withStyle(ChatFormatting.RED), true);
-            return InteractionResult.SUCCESS;
+            return InteractionResult.SUCCESS;   // ★ 删掉了原文文字提示
         }
 
         int current = saw.getOrDefault(ModDataComponents.HAND_SAW_RECIPE_INDEX.get(), 0);
         int next = (current + 1) % recipes.size();
         saw.set(ModDataComponents.HAND_SAW_RECIPE_INDEX.get(), next);
 
-        RecipeHolder<? extends Recipe<?>> recipe = recipes.get(next);
-        ItemStack result = recipe.value().getResultItem(level.registryAccess());
-
-        player.displayClientMessage(
-                Component.translatable("item.create_hand_made.hand_saw.recipe_selected",
-                                result.getHoverName(), next + 1, recipes.size())
-                        .withStyle(ChatFormatting.GREEN), true);
-
+        // ★ 删掉了"已选择：xxx（N/M）"的文字提示，只保留音效
         level.playSound(null, player.blockPosition(), SoundEvents.UI_BUTTON_CLICK.value(),
                 SoundSource.PLAYERS, 0.5f, 1.4f);
 
         return InteractionResult.SUCCESS;
     }
-
     // ================= 斧头兜底 =================
 
     private InteractionResult handleAxeAction(UseOnContext context) {

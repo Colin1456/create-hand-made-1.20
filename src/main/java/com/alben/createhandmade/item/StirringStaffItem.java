@@ -3,16 +3,15 @@ package com.alben.createhandmade.item;
 import com.alben.createhandmade.network.PressParticlesPacket;
 import com.alben.createhandmade.network.PressParticlesPacket.ParticleStyle;
 import com.alben.createhandmade.network.StirringStatePacket;
-import com.simibubi.create.AllRecipeTypes;
+import com.alben.createhandmade.recipe.HandMadeRecipePool;
+import com.alben.createhandmade.recipe.HandMadeTool;
 import com.simibubi.create.AllSoundEvents;
 import com.simibubi.create.content.fluids.potion.PotionMixingRecipes;
 import com.simibubi.create.content.kinetics.mixer.MixingRecipe;
-import com.simibubi.create.content.kinetics.press.MechanicalPressBlockEntity;
 import com.simibubi.create.content.processing.basin.BasinBlockEntity;
 import com.simibubi.create.content.processing.basin.BasinRecipe;
 import com.simibubi.create.foundation.item.CustomUseEffectsItem;
 import com.simibubi.create.foundation.item.render.SimpleCustomRenderer;
-import com.simibubi.create.foundation.recipe.RecipeFinder;
 import com.simibubi.create.infrastructure.config.AllConfigs;
 import net.createmod.catnip.data.TriState;
 import net.minecraft.core.BlockPos;
@@ -29,10 +28,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.UseAnim;
-import net.minecraft.world.item.crafting.CraftingRecipe;
-import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
-import net.minecraft.world.item.crafting.ShapedRecipe;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.BlockHitResult;
@@ -49,7 +45,6 @@ import java.util.function.Consumer;
 
 public class StirringStaffItem extends Item implements CustomUseEffectsItem {
 
-    private static final Object MIXING_RECIPE_KEY = new Object();
     private static final int STIR_DURATION = 60;   // 3 秒
     private static final int WINDUP_TICKS = 8;   // 起手 1 秒不处理
 
@@ -183,17 +178,31 @@ public class StirringStaffItem extends Item implements CustomUseEffectsItem {
         if (basin.isEmpty()) return null;
 
         // 1. 普通配方：MIXING 类型 + 工作台无序合成
+        //    两类候选都来自统一配方池，并按配方管理器的全局顺序合并 ——
+        //    与改造前 RecipeFinder.get(level, predicate) 的遍历顺序一致，
+        //    因此"两类同时匹配同一盆内容时谁先被选中"也和改造前一致。
+        //    BasinRecipe.match 的第二个参数就是 Recipe<?>，可以直接传 holder.value()。
+        //
+        //    ★ try/catch 刻意保留（与改造前一致）：收集与匹配都会遍历全量配方
+        //      并调用配方自身的 getIngredients() / matches，任何一条畸形配方抛异常
+        //      都不应该让整个搅拌流程中断。
         try {
-            for (RecipeHolder<?> holder : RecipeFinder.get(MIXING_RECIPE_KEY, level,
-                    StirringStaffItem::matchStaticFilters)) {
+            List<RecipeHolder<?>> merged = HandMadeRecipePool.mergeInGlobalOrder(level,
+                    HandMadeRecipePool.getBaseRecipes(HandMadeTool.STIRRING_STAFF, level),
+                    HandMadeRecipePool.getBaseRecipes(HandMadeTool.STIRRING_STAFF_AUTO_SHAPELESS, level));
+            for (RecipeHolder<?> holder : merged) {
                 if (BasinRecipe.match(basin, holder.value())) {
                     return holder;
                 }
             }
         } catch (Exception ignored) {
+            // 防御畸形配方导致整个搅拌中断
         }
 
         // 2. 自动酿造
+        //    ★ 这里刻意不走配方池：PotionMixingRecipes.sortRecipesByItem(level) 是按物品
+        //      建好的索引，能用 get(Item) 直接命中，而 getBaseRecipes(STIRRING_STAFF_AUTO_BREWING)
+        //      是全量列表，逐条匹配会显著变慢。配方池的那个 case 只服务于 JEI 展示。
         if (AllConfigs.server().recipes.allowBrewingInMixer.get()) {
             for (int i = 0; i < basin.inputInventory.getSlots(); i++) {
                 ItemStack s = basin.inputInventory.getItem(i);
@@ -213,18 +222,6 @@ public class StirringStaffItem extends Item implements CustomUseEffectsItem {
         }
 
         return null;
-    }
-
-    private static boolean matchStaticFilters(RecipeHolder<? extends Recipe<?>> holder) {
-        Recipe<?> r = holder.value();
-        boolean shapelessCrafting = r instanceof CraftingRecipe
-                && !(r instanceof ShapedRecipe)
-                && AllConfigs.server().recipes.allowShapelessInMixer.get()
-                && r.getIngredients().size() > 1
-                && !MechanicalPressBlockEntity.canCompress(r)
-                && !AllRecipeTypes.shouldIgnoreInAutomation(holder);
-        boolean mixingRecipe = r.getType() == AllRecipeTypes.MIXING.getType();
-        return shapelessCrafting || mixingRecipe;
     }
 
     // ================= 动画 / 音效屏蔽 =================

@@ -14,6 +14,8 @@ import com.alben.createhandmade.compat.jei.category.MortarMillingCategory;
 import com.alben.createhandmade.compat.jei.category.PointerApplicationCategory;
 import com.alben.createhandmade.compat.jei.category.StirringStaffMixingCategory;
 import com.alben.createhandmade.item.ModItems;
+import com.alben.createhandmade.recipe.HandMadeRecipePool;
+import com.alben.createhandmade.recipe.HandMadeTool;
 import com.simibubi.create.AllBlocks;
 import com.simibubi.create.AllItems;
 import com.simibubi.create.AllRecipeTypes;
@@ -22,21 +24,16 @@ import com.simibubi.create.compat.jei.DoubleItemIcon;
 import com.simibubi.create.compat.jei.EmptyBackground;
 import com.simibubi.create.compat.jei.category.CreateRecipeCategory;
 import com.simibubi.create.compat.jei.category.SpoutCategory;
-import com.simibubi.create.content.fluids.potion.PotionMixingRecipes;
 import com.simibubi.create.content.fluids.transfer.FillingRecipe;
-import com.simibubi.create.content.kinetics.crafter.MechanicalCraftingRecipe;
-import com.simibubi.create.content.kinetics.crusher.CrushingRecipe;
+import com.simibubi.create.content.kinetics.crusher.AbstractCrushingRecipe;
 import com.simibubi.create.content.kinetics.deployer.ItemApplicationRecipe;
 import com.simibubi.create.content.kinetics.fan.processing.AllFanProcessingTypes;
 import com.simibubi.create.content.kinetics.fan.processing.HauntingRecipe;
 import com.simibubi.create.content.kinetics.fan.processing.SplashingRecipe;
 import com.simibubi.create.content.kinetics.millstone.MillingRecipe;
-import com.simibubi.create.content.kinetics.press.MechanicalPressBlockEntity;
 import com.simibubi.create.content.kinetics.press.PressingRecipe;
 import com.simibubi.create.content.kinetics.saw.CuttingRecipe;
 import com.simibubi.create.content.processing.basin.BasinRecipe;
-import com.simibubi.create.foundation.utility.RecipeGenericsUtil;
-import com.simibubi.create.infrastructure.config.AllConfigs;
 import mezz.jei.api.IModPlugin;
 import mezz.jei.api.JeiPlugin;
 import mezz.jei.api.registration.IRecipeCatalystRegistration;
@@ -49,6 +46,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.crafting.*;
+import net.minecraft.world.level.Level;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -148,8 +146,10 @@ public class CreateHandMadeJEI implements IModPlugin {
         );
         allCategories.add(new MortarMillingCategory(mortarMillingInfo));
 
-        // ==================== 碾钵 · 粉碎 ====================
-        CreateRecipeCategory.Info<CrushingRecipe> crusherMortarCrushingInfo = new CreateRecipeCategory.Info<>(
+        // ==================== 碾钵 · 粉碎 + 研磨 ====================
+        // 类型用 AbstractCrushingRecipe（CRUSHING 与 MILLING 的共同父类），
+        // 类别显示名仍是"碾钵粉碎"，但内容同时包含两种配方。
+        CreateRecipeCategory.Info<AbstractCrushingRecipe> crusherMortarCrushingInfo = new CreateRecipeCategory.Info<>(
                 ModJeiTypes.CRUSHER_MORTAR_CRUSHING,
                 Component.translatable("jei.create_hand_made.crusher_mortar_crushing"),
                 new EmptyBackground(177, 70),
@@ -285,75 +285,63 @@ public class CreateHandMadeJEI implements IModPlugin {
 
     // ==================== 配方收集 ====================
 
-    private static List<RecipeHolder<CuttingRecipe>> collectHandSawRecipes() {
-        List<RecipeHolder<CuttingRecipe>> result = new ArrayList<>();
-        List<RecipeHolder<?>> all = CreateJEI.getTypedRecipes(AllRecipeTypes.CUTTING.getType());
-        for (RecipeHolder<?> h : all) {
-            if (h.value() instanceof CuttingRecipe c) {
-                result.add(new RecipeHolder<>(h.id(), c));
-            }
-        }
-        return result;
-    }
-
-    private static List<RecipeHolder<PressingRecipe>> collectPressingRecipes() {
-        List<RecipeHolder<PressingRecipe>> result = new ArrayList<>();
-        List<RecipeHolder<?>> all = CreateJEI.getTypedRecipes(AllRecipeTypes.PRESSING.getType());
-        for (RecipeHolder<?> h : all) {
-            if (h.value() instanceof PressingRecipe p) {
-                result.add(new RecipeHolder<>(h.id(), p));
-            }
-        }
-        return result;
-    }
-
     /**
-     * 冲压锤 · 工作盆 · 打包。
-     * 只收集 COMPACTING 类型配方。
+     * 从统一配方池收集某个工具类别的配方，并按目标类型过滤。
+     *
+     * <p>JEI 与游戏内工具现在共用同一份候选集（{@link HandMadeRecipePool}）：
+     * 池负责「收集候选」，本方法只做类型对齐，不再重复任何筛选规则 ——
+     * 那些规则（config 开关、MechanicalCraftingRecipe 排除、压缩判定、
+     * automation 忽略……）都已经在池里。</p>
+     *
+     * <p>level 为 null（尚未进入世界）时返回空列表。</p>
+     *
+     * @param tool  工具 + 配方类型组合
+     * @param clazz 目标配方类型，用于过滤与泛型对齐
+     * @return 该类别下所有 {@code clazz} 类型的配方
      */
-    private static List<RecipeHolder<BasinRecipe>> collectCompactingRecipes() {
-        List<RecipeHolder<BasinRecipe>> result = new ArrayList<>();
-        List<RecipeHolder<?>> compacting = CreateJEI.getTypedRecipes(AllRecipeTypes.COMPACTING.getType());
-        for (RecipeHolder<?> h : compacting) {
-            if (h.value() instanceof BasinRecipe b) {
-                result.add(new RecipeHolder<>(h.id(), b));
+    private static <T extends Recipe<?>> List<RecipeHolder<T>> collectFromPool(HandMadeTool tool, Class<T> clazz) {
+        List<RecipeHolder<T>> result = new ArrayList<>();
+        Level level = Minecraft.getInstance().level;
+        if (level == null) return result;
+
+        for (RecipeHolder<?> holder : HandMadeRecipePool.getBaseRecipes(tool, level)) {
+            // isInstance + cast 是类型安全的，不需要 unchecked 强转。
+            if (clazz.isInstance(holder.value())) {
+                result.add(new RecipeHolder<>(holder.id(), clazz.cast(holder.value())));
             }
         }
         return result;
     }
+
+    /** 手锯 · 切削（CUTTING）。 */
+    private static List<RecipeHolder<CuttingRecipe>> collectHandSawRecipes() {
+        return collectFromPool(HandMadeTool.HAND_SAW, CuttingRecipe.class);
+    }
+
+    /** 冲压锤 · 置物台（PRESSING）。 */
+    private static List<RecipeHolder<PressingRecipe>> collectPressingRecipes() {
+        return collectFromPool(HandMadeTool.PRESS_HAMMER_DEPOT, PressingRecipe.class);
+    }
+
+    /** 冲压锤 · 工作盆 · 打包（COMPACTING）。 */
+    private static List<RecipeHolder<BasinRecipe>> collectCompactingRecipes() {
+        return collectFromPool(HandMadeTool.PRESS_HAMMER_BASIN, BasinRecipe.class);
+    }
+
     /**
      * 冲压锤 · 工作盆 · 自动摆放（4/9 合 1）。
-     * 收集可压缩的 CraftingRecipe（4 或 9 个同类材料）。
+     *
+     * <p>配方池的 {@link HandMadeTool#PRESS_HAMMER_AUTO_SQUARE} 只提供「可压缩」的
+     * CraftingRecipe（config 开关、压缩判定、automation 忽略都已在池里），
+     * 这里只负责把它包成 BasinRecipe 以便 BasinCategory 渲染。</p>
      */
     private static List<RecipeHolder<BasinRecipe>> collectAutoSquareRecipes() {
-        List<RecipeHolder<BasinRecipe>> result = new ArrayList<>();
-
-        if (!AllConfigs.server().recipes.allowShapedSquareInPress.get()) {
-            return result;
-        }
-
-        List<RecipeHolder<?>> crafting = CreateJEI.getTypedRecipes(RecipeType.CRAFTING);
-        for (RecipeHolder<?> h : crafting) {
-            if (!(h.value() instanceof CraftingRecipe cr)) continue;
-            if (cr instanceof MechanicalCraftingRecipe) continue;
-            if (!MechanicalPressBlockEntity.canCompress(cr)) continue;
-            if (AllRecipeTypes.shouldIgnoreInAutomation(h)) continue;
-
-            result.add(BasinRecipe.convertShapeless(h));
-        }
-
-        return result;
+        return wrapAsBasin(HandMadeTool.PRESS_HAMMER_AUTO_SQUARE);
     }
 
+    /** 灌注枪 · 注液（FILLING），再追加 SpoutCategory 的转换配方。 */
     private List<RecipeHolder<FillingRecipe>> collectInfusionGunRecipes() {
-        List<RecipeHolder<FillingRecipe>> result = new ArrayList<>();
-
-        List<RecipeHolder<?>> all = CreateJEI.getTypedRecipes(AllRecipeTypes.FILLING.getType());
-        for (RecipeHolder<?> h : all) {
-            if (h.value() instanceof FillingRecipe f) {
-                result.add(new RecipeHolder<>(h.id(), f));
-            }
-        }
+        List<RecipeHolder<FillingRecipe>> result = collectFromPool(HandMadeTool.INFUSION_GUN, FillingRecipe.class);
 
         if (ingredientManager != null) {
             SpoutCategory.consumeRecipes(result::add, ingredientManager);
@@ -362,130 +350,172 @@ public class CreateHandMadeJEI implements IModPlugin {
         return result;
     }
 
+    /** 研钵 · 研磨（MILLING）。 */
     private static List<RecipeHolder<MillingRecipe>> collectMillingRecipes() {
-        List<RecipeHolder<MillingRecipe>> result = new ArrayList<>();
-        List<RecipeHolder<?>> all = CreateJEI.getTypedRecipes(AllRecipeTypes.MILLING.getType());
-        for (RecipeHolder<?> h : all) {
-            if (h.value() instanceof MillingRecipe m) {
-                result.add(new RecipeHolder<>(h.id(), m));
-            }
-        }
-        return result;
+        return collectFromPool(HandMadeTool.MORTAR, MillingRecipe.class);
     }
 
-    private static List<RecipeHolder<CrushingRecipe>> collectCrushingRecipes() {
-        List<RecipeHolder<CrushingRecipe>> result = new ArrayList<>();
-        List<RecipeHolder<?>> all = CreateJEI.getTypedRecipes(AllRecipeTypes.CRUSHING.getType());
-        for (RecipeHolder<?> h : all) {
-            if (h.value() instanceof CrushingRecipe c) {
-                result.add(new RecipeHolder<>(h.id(), c));
-            }
-        }
-        return result;
+    /**
+     * 碾钵 · 粉碎 + 研磨。
+     *
+     * <p>配方池的 {@link HandMadeTool#CRUSHER_MORTAR} 本来就把 CRUSHING 与 MILLING
+     * 都收进来了（游戏内是「先粉碎、后研磨」，池里 CRUSHING 在前、MILLING 在后）。
+     * 这里按 {@link AbstractCrushingRecipe} 过滤 —— 它是两者的共同父类，
+     * 因此两类都会进本类别，且保持"粉碎在前"的顺序。</p>
+     */
+    private static List<RecipeHolder<AbstractCrushingRecipe>> collectCrushingRecipes() {
+        return collectFromPool(HandMadeTool.CRUSHER_MORTAR, AbstractCrushingRecipe.class);
     }
 
+    /** 搅拌杖 · 混合（MIXING）。 */
     private static List<RecipeHolder<BasinRecipe>> collectMixingRecipes() {
-        List<RecipeHolder<BasinRecipe>> result = new ArrayList<>();
-        List<RecipeHolder<?>> all = CreateJEI.getTypedRecipes(AllRecipeTypes.MIXING.getType());
-        for (RecipeHolder<?> h : all) {
-            if (h.value() instanceof BasinRecipe b) {
-                result.add(new RecipeHolder<>(h.id(), b));
-            }
-        }
-        return result;
+        return collectFromPool(HandMadeTool.STIRRING_STAFF, BasinRecipe.class);
     }
     /**
      * 搅拌杖 · 自动无序合成。
-     * 收集无序的 CraftingRecipe（非 4/9 合 1、非 Shaped）。
+     *
+     * <p>配方池的 {@link HandMadeTool#STIRRING_STAFF_AUTO_SHAPELESS} 只提供
+     * 符合条件的无序 CraftingRecipe（config 开关、ShapedRecipe 排除、原料数、
+     * 压缩判定、automation 忽略都已在池里），这里只负责包成 BasinRecipe 以便渲染。</p>
      */
     private static List<RecipeHolder<BasinRecipe>> collectAutoShapelessRecipes() {
-        List<RecipeHolder<BasinRecipe>> result = new ArrayList<>();
-
-        if (!AllConfigs.server().recipes.allowShapelessInMixer.get()) {
-            return result;
-        }
-
-        List<RecipeHolder<?>> crafting = CreateJEI.getTypedRecipes(RecipeType.CRAFTING);
-        for (RecipeHolder<?> h : crafting) {
-            if (!(h.value() instanceof CraftingRecipe cr)) continue;
-            if (cr instanceof ShapedRecipe) continue;
-            if (cr.getIngredients().size() <= 1) continue;
-            if (MechanicalPressBlockEntity.canCompress(cr)) continue;
-            if (AllRecipeTypes.shouldIgnoreInAutomation(h)) continue;
-
-            result.add(BasinRecipe.convertShapeless(h));
-        }
-
-        return result;
+        return wrapAsBasin(HandMadeTool.STIRRING_STAFF_AUTO_SHAPELESS);
     }
+
     /**
      * 搅拌杖 · 自动酿造。
-     * 收集 PotionMixingRecipes 生成的所有酿造配方。
-     * 用 RecipeGenericsUtil.cast 把 RecipeHolder<MixingRecipe> 包成 RecipeHolder<BasinRecipe>，
-     * 这样 BasinCategory 才能处理。
+     *
+     * <p>直接消费配方池的 {@link HandMadeTool#STIRRING_STAFF_AUTO_BREWING}
+     * —— 池内部已经做完 {@code PotionMixingRecipes.createRecipes} 与泛型上推，
+     * 并含 {@code allowBrewingInMixer} 开关判断。这里只剩一次类型对齐，
+     * JEI 侧的 unchecked cast 是必要的。</p>
+     *
+     * <p>注意：游戏内的自动酿造<b>不走</b>这条路径 —— 它用
+     * {@code PotionMixingRecipes.sortRecipesByItem} 的按物品索引直查，
+     * 池里的这一条只服务于本类别。</p>
      */
+    @SuppressWarnings({"unchecked", "rawtypes"})
     private static List<RecipeHolder<BasinRecipe>> collectAutoBrewingRecipes() {
+        Level level = Minecraft.getInstance().level;
+        if (level == null) return List.of();
+        return (List) HandMadeRecipePool.getBaseRecipes(HandMadeTool.STIRRING_STAFF_AUTO_BREWING, level);
+    }
+
+    /** 指杆 · 应用（DEPLOYING + ITEM_APPLICATION，前者在前）。 */
+    private static List<RecipeHolder<ItemApplicationRecipe>> collectPointerRecipes() {
+        return collectFromPool(HandMadeTool.POINTER, ItemApplicationRecipe.class);
+    }
+
+    /**
+     * 把配方池里某一类「工作台配方」包装成 {@link BasinRecipe}，供 BasinCategory 渲染。
+     *
+     * <p>配方池刻意返回原始 {@link CraftingRecipe} 而不是 BasinRecipe
+     * （见 {@link HandMadeRecipePool} 里的说明：包装会让 {@code getRemainingItems}
+     * 走 BasinRecipe 的默认实现，与游戏内原本的容器残留返还行为不一致）。
+     * 包装只为 JEI 展示服务，所以放在这里做，且只在客户端执行
+     * （{@code BasinRecipe.convertShapeless} 内部使用
+     * {@code Minecraft.getInstance().level}）。</p>
+     */
+    private static List<RecipeHolder<BasinRecipe>> wrapAsBasin(HandMadeTool tool) {
         List<RecipeHolder<BasinRecipe>> result = new ArrayList<>();
-
-        if (!AllConfigs.server().recipes.allowBrewingInMixer.get()) {
-            return result;
-        }
-
-        var level = Minecraft.getInstance().level;
+        Level level = Minecraft.getInstance().level;
         if (level == null) return result;
 
-        // ★ 关键：cast 包装
-        result.addAll(RecipeGenericsUtil.cast(PotionMixingRecipes.createRecipes(level)));
+        for (RecipeHolder<?> holder : HandMadeRecipePool.getBaseRecipes(tool, level)) {
+            result.add(BasinRecipe.convertShapeless(holder));
+        }
         return result;
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static List<RecipeHolder<ItemApplicationRecipe>> collectPointerRecipes() {
-        List<RecipeHolder<ItemApplicationRecipe>> result = new ArrayList<>();
-
-        // DEPLOYING
-        List<RecipeHolder<?>> deploying = CreateJEI.getTypedRecipes(AllRecipeTypes.DEPLOYING.getType());
-        for (RecipeHolder<?> h : deploying) {
-            if (h.value() instanceof ItemApplicationRecipe r) {
-                result.add(new RecipeHolder<>(h.id(), r));
-            }
-        }
-
-        // ITEM_APPLICATION
-        List<RecipeHolder<?>> itemApp = CreateJEI.getTypedRecipes(AllRecipeTypes.ITEM_APPLICATION.getType());
-        for (RecipeHolder<?> h : itemApp) {
-            if (h.value() instanceof ItemApplicationRecipe r) {
-                result.add(new RecipeHolder<>(h.id(), r));
-            }
-        }
-
-        return result;
-    }
-
+    /**
+     * 风箱 · 熔炼。
+     *
+     * <p>与 Create 原版「鼓风熔炼」类别（{@code CreateJEI} 里的 {@code fan_blasting}）
+     * 的配方集完全一致，逐步对应它的 builder 链：</p>
+     * <ol>
+     *   <li>{@code addTypedRecipesExcluding(SMELTING, BLASTING)} —— 熔炼表里
+     *       「输入与某条 BLASTING 相同」的跳过；</li>
+     *   <li>{@code addTypedRecipes(BLASTING)} —— 再补上全部 BLASTING；</li>
+     *   <li>{@code removeRecipes(SMOKING)} —— 输入与输出都与某条 SMOKING 相同的移除，
+     *       <b>这一步才是把食物（生牛肉 → 熟牛肉之类）排掉的关键</b>；</li>
+     *   <li>{@code removeNonAutomation()} —— 移除 id 以 {@code _manual_only} 结尾的配方。</li>
+     * </ol>
+     *
+     * <p>前两步的顺序也照 Create 保留：SMELTING（已排除者）在前，BLASTING 在后。</p>
+     *
+     * <p><b>第 4 步与 Create 逐字一致：</b>Create 的 {@code removeNonAutomation()} 实现是
+     * {@code recipes.removeIf(AllRecipeTypes.CAN_BE_AUTOMATED.negate())}，
+     * 只看配方 id 的 {@code _manual_only} 后缀；而 {@code shouldIgnoreInAutomation}
+     * 还会额外看 serializer 的 AUTOMATION_IGNORE 标签。因此这里用的是前者。</p>
+     */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static List<RecipeHolder<AbstractCookingRecipe>> collectBellowsBlastingRecipes() {
         List<RecipeHolder<AbstractCookingRecipe>> result = new ArrayList<>();
-        var level = Minecraft.getInstance().level;
+        Level level = Minecraft.getInstance().level;
         if (level == null) return result;
 
-        for (var h : level.getRecipeManager().getAllRecipesFor(RecipeType.SMELTING)) {
-            result.add((RecipeHolder) h);
-        }
+        // 1. BLASTING 全表：既用作排除参照，也是最终结果的一部分。
+        List<RecipeHolder<AbstractCookingRecipe>> blastingAll = new ArrayList<>();
         for (var h : level.getRecipeManager().getAllRecipesFor(RecipeType.BLASTING)) {
-            result.add((RecipeHolder) h);
+            blastingAll.add((RecipeHolder) h);
         }
+
+        // 2. SMELTING 里排除「输入与某条 BLASTING 相同」的。
+        for (var h : level.getRecipeManager().getAllRecipesFor(RecipeType.SMELTING)) {
+            boolean excluded = false;
+            for (RecipeHolder<AbstractCookingRecipe> b : blastingAll) {
+                if (CreateJEI.doInputsMatch(h.value(), b.value())) {
+                    excluded = true;
+                    break;
+                }
+            }
+            if (!excluded) {
+                result.add((RecipeHolder) h);
+            }
+        }
+
+        // 3. 加上全部 BLASTING。
+        result.addAll(blastingAll);
+
+        // 4. 移除「输入与输出都与某条 SMOKING 相同」的 —— 食物就是在这里被排掉的。
+        List<RecipeHolder<AbstractCookingRecipe>> smokingAll = new ArrayList<>();
+        for (var h : level.getRecipeManager().getAllRecipesFor(RecipeType.SMOKING)) {
+            smokingAll.add((RecipeHolder) h);
+        }
+        result.removeIf(r -> {
+            for (RecipeHolder<AbstractCookingRecipe> s : smokingAll) {
+                if (CreateJEI.doInputsMatch(r.value(), s.value())
+                        && CreateJEI.doOutputsMatch(r.value(), s.value())) {
+                    return true;
+                }
+            }
+            return false;
+        });
+
+        // 5. 移除 non-automation（与 Create 的 removeNonAutomation 逐字一致）。
+        result.removeIf(AllRecipeTypes.CAN_BE_AUTOMATED.negate());
+
         return result;
     }
 
+    /**
+     * 风箱 · 烟熏。
+     *
+     * <p>对应 Create 原版 {@code fan_smoking}：
+     * {@code addTypedRecipes(SMOKING)} 之后还有一步 {@code removeNonAutomation()}。
+     * 原实现只做了前半步，这里补上后半步，与 Create 一致
+     * （同样用 {@code CAN_BE_AUTOMATED.negate()}，即只按 {@code _manual_only} 后缀过滤）。</p>
+     */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private static List<RecipeHolder<AbstractCookingRecipe>> collectBellowsSmokingRecipes() {
         List<RecipeHolder<AbstractCookingRecipe>> result = new ArrayList<>();
-        var level = Minecraft.getInstance().level;
+        Level level = Minecraft.getInstance().level;
         if (level == null) return result;
 
         for (var h : level.getRecipeManager().getAllRecipesFor(RecipeType.SMOKING)) {
             result.add((RecipeHolder) h);
         }
+        result.removeIf(AllRecipeTypes.CAN_BE_AUTOMATED.negate());
         return result;
     }
 

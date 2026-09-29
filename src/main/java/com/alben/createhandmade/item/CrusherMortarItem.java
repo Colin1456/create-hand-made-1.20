@@ -1,7 +1,8 @@
 package com.alben.createhandmade.item;
 
 import com.alben.createhandmade.ModDataComponents;
-import com.simibubi.create.AllRecipeTypes;
+import com.alben.createhandmade.recipe.HandMadeRecipePool;
+import com.alben.createhandmade.recipe.HandMadeTool;
 import com.simibubi.create.content.kinetics.crusher.CrushingRecipe;
 import com.simibubi.create.content.kinetics.millstone.MillingRecipe;
 import com.simibubi.create.foundation.item.CustomUseEffectsItem;
@@ -20,6 +21,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.UseAnim;
+import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.SingleRecipeInput;
 import net.minecraft.world.level.Level;
@@ -30,7 +32,6 @@ import net.neoforged.neoforge.client.extensions.common.IClientItemExtensions;
 
 import javax.annotation.Nullable;
 import java.util.List;
-import java.util.Optional;
 import java.util.function.Consumer;
 
 public class CrusherMortarItem extends Item implements CustomUseEffectsItem {
@@ -213,22 +214,39 @@ public class CrusherMortarItem extends Item implements CustomUseEffectsItem {
         return true;
     }
 
-    // ================= 配方查找：先 CRUSHING，退回 MILLING =================
+    // ================= 配方查找：走统一配方池 =================
 
     /**
-     * 复刻 CrushingWheelControllerBlockEntity.findRecipe()：
-     * 先查粉碎配方，没有就退回研磨配方。
+     * 复刻 CrushingWheelControllerBlockEntity.findRecipe()：先粉碎、后研磨。
+     *
+     * <p>「先粉碎、后研磨」这个优先级现在由配方池保证 ——
+     * {@link HandMadeRecipePool#getBaseRecipes} 的
+     * {@link HandMadeTool#CRUSHER_MORTAR} 列表已经把 CRUSHING 全部排在前面、
+     * MILLING 全部排在后面。所以这里<b>不再自己分两段查询</b>，只按顺序遍历、
+     * 取第一个匹配即可，优先级与改造前完全一致。</p>
+     *
+     * <p>改造前的两段查询是 {@code AllRecipeTypes.CRUSHING.find(...)} 与
+     * {@code AllRecipeTypes.MILLING.find(...)}，它们的实现都是
+     * {@code level.getRecipeManager().getRecipeFor(...)}，等价于
+     * 「按配方管理器顺序找第一条 {@code matches}」，与这里的顺序遍历 + matches 一致。</p>
      */
     @Nullable
     private static RecipeHolder<?> findRecipe(Level level, ItemStack input) {
         SingleRecipeInput recipeInput = new SingleRecipeInput(input);
 
-        Optional<RecipeHolder<CrushingRecipe>> crushing = AllRecipeTypes.CRUSHING.find(recipeInput, level);
-        if (crushing.isPresent()) return crushing.get();
-
-        Optional<RecipeHolder<MillingRecipe>> milling = AllRecipeTypes.MILLING.find(recipeInput, level);
-        if (milling.isPresent()) return milling.get();
-
+        // 用 instanceof 模式匹配取出确切类型再调 matches：
+        // holder.value() 的静态类型是 Recipe<?>，其 matches 的参数是通配符捕获，
+        // 无法直接接受 SingleRecipeInput。这样既不需要 unchecked 强转，
+        // 也不会在将来类型变化时静默出错。
+        // CRUSHING 与 MILLING 这两段各自的顺序由配方池保证。
+        for (RecipeHolder<?> holder : HandMadeRecipePool.getBaseRecipes(HandMadeTool.CRUSHER_MORTAR, level)) {
+            Recipe<?> recipe = holder.value();
+            boolean matched = (recipe instanceof CrushingRecipe crushing && crushing.matches(recipeInput, level))
+                    || (recipe instanceof MillingRecipe milling && milling.matches(recipeInput, level));
+            if (matched) {
+                return holder;
+            }
+        }
         return null;
     }
 }

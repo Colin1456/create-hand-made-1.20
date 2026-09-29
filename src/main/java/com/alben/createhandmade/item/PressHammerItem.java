@@ -2,12 +2,13 @@ package com.alben.createhandmade.item;
 
 import com.alben.createhandmade.network.PressParticlesPacket;
 import com.alben.createhandmade.network.PressParticlesPacket.ParticleStyle;
+import com.alben.createhandmade.recipe.HandMadeRecipePool;
+import com.alben.createhandmade.recipe.HandMadeTool;
 import com.simibubi.create.AllRecipeTypes;
 import com.simibubi.create.AllSoundEvents;
 import com.simibubi.create.content.kinetics.belt.behaviour.TransportedItemStackHandlerBehaviour;
 import com.simibubi.create.content.kinetics.belt.behaviour.TransportedItemStackHandlerBehaviour.TransportedResult;
 import com.simibubi.create.content.kinetics.belt.transport.TransportedItemStack;
-import com.simibubi.create.content.kinetics.crafter.MechanicalCraftingRecipe;
 import com.simibubi.create.content.kinetics.press.PressingRecipe;
 import com.simibubi.create.content.logistics.depot.DepotBlockEntity;
 import com.simibubi.create.content.processing.basin.BasinBlock;
@@ -15,12 +16,8 @@ import com.simibubi.create.content.processing.basin.BasinBlockEntity;
 import com.simibubi.create.content.processing.basin.BasinRecipe;
 import com.simibubi.create.content.processing.sequenced.SequencedAssemblyRecipe;
 import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
-import com.simibubi.create.foundation.item.ItemHelper;
 import com.simibubi.create.foundation.recipe.RecipeApplier;
-import com.simibubi.create.foundation.recipe.RecipeFinder;
-import com.simibubi.create.infrastructure.config.AllConfigs;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.NonNullList;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvents;
@@ -35,9 +32,6 @@ import net.minecraft.world.entity.projectile.ProjectileUtil;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.UseAnim;
-import net.minecraft.world.item.crafting.CraftingRecipe;
-import net.minecraft.world.item.crafting.Ingredient;
-import net.minecraft.world.item.crafting.Recipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.SingleRecipeInput;
 import net.minecraft.world.level.ClipContext;
@@ -69,8 +63,7 @@ import java.util.UUID;
 @EventBusSubscriber
 public class PressHammerItem extends Item {
 
-    private static final int CHARGE_TICKS = 20;
-    private static final Object COMPACTING_RECIPE_KEY = new Object();
+    private static final int CHARGE_TICKS = 15;
     private static final int CHARGE_WINDOW_TICKS = 20;
 
     private static final Map<UUID, Long> CHARGE_SWING = new HashMap<>();
@@ -304,15 +297,24 @@ public class PressHammerItem extends Item {
         }
     }
 
-    // ================= 工作盆（走 BasinRecipe，无需改） =================
+    // ================= 工作盆 =================
 
     private static boolean tryPressBasin(Level level, BlockPos pos) {
         if (!(level.getBlockEntity(pos) instanceof BasinBlockEntity basin)) return false;
         if (basin.isEmpty()) return false;
 
+        // 候选集 = COMPACTING ∪ 可压缩工作台配方，由配方池提供并按配方管理器的
+        // 全局顺序合并 —— 与改造前 RecipeFinder.get(level, predicate) 的遍历顺序一致，
+        // 因此"两类同时匹配同一盆内容时谁先被选中"也和改造前一致。
+        //
+        // ★ try/catch 刻意保留（与改造前一致）：收集与匹配都会遍历全量配方
+        //   并调用配方自身的 getIngredients() / matches，任何一条畸形配方抛异常
+        //   都不应该中断冲压。
         try {
-            for (RecipeHolder<?> holder : RecipeFinder.get(COMPACTING_RECIPE_KEY, level,
-                    PressHammerItem::matchStaticFilters)) {
+            List<RecipeHolder<?>> merged = HandMadeRecipePool.mergeInGlobalOrder(level,
+                    HandMadeRecipePool.getBaseRecipes(HandMadeTool.PRESS_HAMMER_BASIN, level),
+                    HandMadeRecipePool.getBaseRecipes(HandMadeTool.PRESS_HAMMER_AUTO_SQUARE, level));
+            for (RecipeHolder<?> holder : merged) {
                 if (BasinRecipe.match(basin, holder.value())) {
                     if (BasinRecipe.apply(basin, holder.value())) {
                         basin.notifyChangeOfContents();
@@ -321,41 +323,34 @@ public class PressHammerItem extends Item {
                 }
             }
         } catch (Exception ignored) {
+            // 防御畸形配方导致整个冲压中断
         }
         return false;
-    }
-
-    private static boolean matchStaticFilters(RecipeHolder<? extends Recipe<?>> holder) {
-        Recipe<?> recipe = holder.value();
-        boolean isCompressibleCrafting = recipe instanceof CraftingRecipe
-                && !(recipe instanceof MechanicalCraftingRecipe)
-                && canCompress(recipe)
-                && !AllRecipeTypes.shouldIgnoreInAutomation(holder);
-        boolean isCompactingRecipe = recipe.getType() == AllRecipeTypes.COMPACTING.getType();
-        return isCompressibleCrafting || isCompactingRecipe;
-    }
-
-    private static boolean canCompress(Recipe<?> recipe) {
-        if (!(recipe instanceof CraftingRecipe)
-                || !AllConfigs.server().recipes.allowShapedSquareInPress.get())
-            return false;
-        NonNullList<Ingredient> ingredients = recipe.getIngredients();
-        return (ingredients.size() == 4 || ingredients.size() == 9)
-                && ItemHelper.matchAllIngredients(ingredients);
     }
 
     // ================= 置物台 / 传送带 =================
 
     @Nullable
     private static RecipeHolder<?> findPressingRecipe(Level level, ItemStack stack) {
+        // ★ 序列组装不走配方池：它需要按「输入 + 中间物品」的组装进度解析，
+        //   不是一条普通的 PRESSING 配方，保持原样。
         Optional<RecipeHolder<PressingRecipe>> sequenced =
                 SequencedAssemblyRecipe.getRecipe(level, stack,
                         AllRecipeTypes.PRESSING.getType(), PressingRecipe.class);
         if (sequenced.isPresent()) return sequenced.get();
 
-        return AllRecipeTypes.PRESSING.find(new SingleRecipeInput(stack), level)
-                .filter(AllRecipeTypes.CAN_BE_AUTOMATED)
-                .orElse(null);
+        // 候选集改由统一配方池提供；matches 与 automation 过滤留在本类。
+        // 用 instanceof 取出确切的 PressingRecipe 再调 matches：holder.value() 的
+        // 静态类型是 Recipe<?>，其 matches 参数是通配符捕获，无法直接接受 SingleRecipeInput。
+        SingleRecipeInput recipeInput = new SingleRecipeInput(stack);
+        for (RecipeHolder<?> holder : HandMadeRecipePool.getBaseRecipes(HandMadeTool.PRESS_HAMMER_DEPOT, level)) {
+            if (!(holder.value() instanceof PressingRecipe pressing)) continue;
+            if (!pressing.matches(recipeInput, level)) continue;
+            // ★ automation 过滤保留在调用方：配方池与 JEI 都不过滤这些"仅手动"配方。
+            if (!AllRecipeTypes.CAN_BE_AUTOMATED.test(holder)) continue;
+            return holder;
+        }
+        return null;
     }
 
     private static boolean tryPressTransported(Level level, BlockPos pos) {

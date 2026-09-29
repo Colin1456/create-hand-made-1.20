@@ -3,6 +3,8 @@ package com.alben.createhandmade.item;
 import com.alben.createhandmade.network.HighlightBlockPacket;
 import com.alben.createhandmade.network.PressParticlesPacket;
 import com.alben.createhandmade.network.PressParticlesPacket.ParticleStyle;
+import com.alben.createhandmade.recipe.HandMadeRecipePool;
+import com.alben.createhandmade.recipe.HandMadeTool;
 import com.simibubi.create.AllRecipeTypes;
 import com.simibubi.create.content.kinetics.belt.behaviour.TransportedItemStackHandlerBehaviour;
 import com.simibubi.create.content.kinetics.belt.behaviour.TransportedItemStackHandlerBehaviour.TransportedResult;
@@ -290,18 +292,30 @@ public class PointerItem extends Item {
         tempInv.setStackInSlot(1, tool);
         RecipeWrapper wrapper = new RecipeWrapper(tempInv);
 
+        // ★ 序列组装不走配方池：它需要按「输入 + 中间物品」的组装进度解析，
+        //   不是一条普通的 DEPLOYING 配方，保持原样。
         Optional<RecipeHolder<DeployerApplicationRecipe>> sequenced =
                 SequencedAssemblyRecipe.getRecipe(level, wrapper,
                         AllRecipeTypes.DEPLOYING.getType(), DeployerApplicationRecipe.class);
         if (sequenced.isPresent()) return sequenced.get();
 
-        var deploying = AllRecipeTypes.DEPLOYING.find(wrapper, level)
-                .filter(AllRecipeTypes.CAN_BE_AUTOMATED);
-        if (deploying.isPresent()) return deploying.get();
-
-        var itemApp = AllRecipeTypes.ITEM_APPLICATION.find(wrapper, level)
-                .filter(AllRecipeTypes.CAN_BE_AUTOMATED);
-        if (itemApp.isPresent()) return itemApp.get();
+        // 候选集改由统一配方池提供。
+        //
+        // ★ 这里**不使用 mergeInGlobalOrder**：POINTER 的两个类别语义互斥，
+        //   优先级是固定的「先 DEPLOYING、后 ITEM_APPLICATION」，
+        //   而不是管理器混合顺序。配方池返回的列表已经保证
+        //   「所有 DEPLOYING 在前、所有 ITEM_APPLICATION 在后，且每个类别内部按管理器顺序」，
+        //   所以顺序遍历取第一个匹配即可，与原逻辑一致。
+        //
+        //   匹配与 automation 过滤留在本类。ItemApplicationRecipe 继承自
+        //   ProcessingRecipe<RecipeWrapper, ...>，其 matches 参数正是 RecipeWrapper，无需转换。
+        for (RecipeHolder<?> holder : HandMadeRecipePool.getBaseRecipes(HandMadeTool.POINTER, level)) {
+            if (!(holder.value() instanceof ItemApplicationRecipe itemApplication)) continue;
+            if (!itemApplication.matches(wrapper, level)) continue;
+            // ★ automation 过滤保留在调用方：配方池与 JEI 都不过滤这些"仅手动"配方。
+            if (!AllRecipeTypes.CAN_BE_AUTOMATED.test(holder)) continue;
+            return holder;
+        }
 
         return null;
     }

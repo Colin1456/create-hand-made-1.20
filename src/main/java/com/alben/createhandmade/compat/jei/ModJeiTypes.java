@@ -1,7 +1,7 @@
 package com.alben.createhandmade.compat.jei;
 
 import com.simibubi.create.content.fluids.transfer.FillingRecipe;
-import com.simibubi.create.content.kinetics.crusher.CrushingRecipe;
+import com.simibubi.create.content.kinetics.crusher.AbstractCrushingRecipe;
 import com.simibubi.create.content.kinetics.deployer.DeployerApplicationRecipe;
 import com.simibubi.create.content.kinetics.deployer.ItemApplicationRecipe;
 import com.simibubi.create.content.kinetics.millstone.MillingRecipe;
@@ -46,8 +46,16 @@ public class ModJeiTypes {
             RecipeType.createRecipeHolderType(
                     ResourceLocation.fromNamespaceAndPath("create_hand_made", "mortar_milling"));
 
-    /** 碾钵 · 粉碎 */
-    public static final RecipeType<RecipeHolder<CrushingRecipe>> CRUSHER_MORTAR_CRUSHING =
+    /**
+     * 碾钵 · 粉碎 + 研磨。
+     *
+     * <p>类型用 {@link AbstractCrushingRecipe} 而不是 {@code CrushingRecipe}：
+     * 它是 CRUSHING 与 MILLING 两类的共同父类（Create 自己的
+     * {@code CrushingCategory} / {@code MillingCategory} 用的也是它），
+     * 这样本类别能同时容纳两种配方 —— 与游戏内碾钵「先粉碎、后研磨」的实际能力一致。
+     * UID 保持不变。</p>
+     */
+    public static final RecipeType<RecipeHolder<AbstractCrushingRecipe>> CRUSHER_MORTAR_CRUSHING =
             RecipeType.createRecipeHolderType(
                     ResourceLocation.fromNamespaceAndPath("create_hand_made", "crusher_mortar_crushing"));
 
