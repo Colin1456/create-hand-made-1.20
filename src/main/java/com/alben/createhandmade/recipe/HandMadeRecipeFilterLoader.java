@@ -90,7 +90,7 @@ public class HandMadeRecipeFilterLoader extends SimpleJsonResourceReloadListener
      * 把 {@code <tool_id>} 转成 {@link HandMadeTool}。
      *
      * <p>{@link HandMadeTool} 没有 id 字段，所以直接用枚举名：
-     * {@code hand_press_basin} → {@code HAND_PRESS_BASIN}。</p>
+     * {@code press_hammer_basin} → {@code PRESS_HAMMER_BASIN}。</p>
      *
      * @return 对应的枚举值；无法识别时返回 null（已记 warning）
      */

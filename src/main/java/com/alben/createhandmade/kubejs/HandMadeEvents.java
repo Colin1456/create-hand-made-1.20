@@ -9,7 +9,7 @@ import dev.latvian.mods.kubejs.event.EventHandler;
  * <p>脚本作者用法：</p>
  * <pre>
  * HandMadeEvents.toolFilter(event =&gt; {
- *     event.disable('hand_press_basin', 'create:compacting/andesite_alloy_from_zinc');
+ *     event.disable('press_hammer_basin', 'create:compacting/andesite_alloy_from_zinc');
  *     event.disableByMod('mortar', 'thermal');
  * });
  * </pre>

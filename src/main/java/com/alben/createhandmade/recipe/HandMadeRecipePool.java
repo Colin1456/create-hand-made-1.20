@@ -96,6 +96,13 @@ public final class HandMadeRecipePool {
                     case INFUSION_GUN -> collectInfusionGun(level);
                 };
 
+        // L3：独占配方（create_hand_made:tool_recipe）。与 Create 类型分开收集、按 tool 字段分派。
+        // 放在 appendExclusive 之前，保证 appendExclusive 仍是「最后做加法」的那一步；
+        // 放在 L2 的 removeIf 之前，保证独占配方同样受数据包 / KubeJS 过滤管辖。
+        if (level != null) {
+            collectExclusiveRecipes(tool, level, base);
+        }
+
         base = HandMadeRecipeRegistry.appendExclusive(tool, base);
 
         // L2：数据包过滤层。放在最后一步，所以连独占追加进来的配方也能被数据包禁用。
@@ -481,6 +488,38 @@ public final class HandMadeRecipePool {
     // ==================================================================
     // 内部工具
     // ==================================================================
+
+    /**
+     * 收集 <b>L3 独占配方</b>（{@link HandMadeRecipeTypes#TOOL_RECIPE}）中属于本工具的那些。
+     *
+     * <p>独占配方活在 {@code create_hand_made:tool_recipe} 这个独立 RecipeType 下，
+     * 所以 Create 的机器（查的是 {@code AllRecipeTypes.XXX.getType()}）永远看不到它们；
+     * 只有本方法把它们并进工具的候选列表。</p>
+     *
+     * <p><b>为什么只有 basin 家族：</b>独占配方类 {@link HandMadeToolRecipe} 必须把
+     * {@code getType()} 换成我们的 type，而 Create 只有 {@code BasinRecipe} 提供了
+     * 接受 {@code IRecipeTypeInfo} 的 protected 构造；Milling / Pressing / Cutting /
+     * Filling / ItemApplication 的构造把 type 写死成 {@code AllRecipeTypes.XXX}，
+     * 无法子类化出自定义 type。所以这里先只接入
+     * {@link HandMadeTool#PRESS_HAMMER_BASIN} 与 {@link HandMadeTool#STIRRING_STAFF}
+     * —— 这两个工具对工作盆用的是 {@code BasinRecipe.match/apply}（不做 instanceof），
+     * 因此工具侧零改动即可消费独占配方。</p>
+     *
+     * @param tool  目标工具
+     * @param level 当前世界（非 null）
+     * @param out   收集结果直接追加到这里
+     */
+    private static void collectExclusiveRecipes(HandMadeTool tool, Level level, List<RecipeHolder<?>> out) {
+        if (tool != HandMadeTool.PRESS_HAMMER_BASIN && tool != HandMadeTool.STIRRING_STAFF) {
+            return;
+        }
+
+        for (RecipeHolder<?> holder : recipesOfType(level, HandMadeRecipeTypes.TOOL_RECIPE.getType())) {
+            if (holder.value() instanceof HandMadeToolRecipe recipe && recipe.getTool() == tool) {
+                out.add(holder);
+            }
+        }
+    }
 
     /**
      * 取某个 {@link RecipeType} 的全部配方。

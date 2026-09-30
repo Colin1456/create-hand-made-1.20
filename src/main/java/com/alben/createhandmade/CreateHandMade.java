@@ -3,6 +3,7 @@ package com.alben.createhandmade;
 import com.alben.createhandmade.item.ModCreativeModeTabs;
 import com.alben.createhandmade.item.ModItems;
 import com.alben.createhandmade.particle.ModParticleTypes;
+import com.alben.createhandmade.recipe.HandMadeRecipeTypes;
 import com.mojang.logging.LogUtils;
 import com.simibubi.create.foundation.data.CreateRegistrate;
 import com.simibubi.create.foundation.item.ItemDescription;
@@ -39,6 +40,9 @@ public class CreateHandMade {
         ModItems.register();
 
         ModParticleTypes.register(modEventBus);
+
+        // L3 独占层：自定义 RecipeType / RecipeSerializer（见 HandMadeRecipeTypes）
+        HandMadeRecipeTypes.register(modEventBus);
 
         NeoForge.EVENT_BUS.register(this);
 
