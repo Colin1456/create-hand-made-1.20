@@ -44,9 +44,9 @@ import java.util.Set;
  * 它与 {@code CreateJEI.getTypedRecipes(type)} 的数据来源和顺序完全一致，
  * 但服务端可用，也让本类在没有装 JEI 的环境下依然能正常工作。</p>
  *
- * <p>调用流程固定为三段：</p>
+ * <p>调用流程固定为两段：</p>
  * <pre>
- * 收集（本类私有方法） -> {@link HandMadeRecipeFilters#apply} 做减法 -> {@link HandMadeRecipeRegistry#appendExclusive} 做加法
+ * 收集（本类私有方法） -> {@link HandMadeRecipeRegistry#appendExclusive} 做加法 -> 数据包禁用过滤
  * </pre>
  *
  * <p><b>TODO（未来的架构简化）：</b>考虑把
@@ -76,7 +76,7 @@ public final class HandMadeRecipePool {
      *
      * @param tool  工具 + 配方类型组合
      * @param level 当前世界；为 null（例如 JEI 在进入世界前回调）时返回空列表
-     * @return 过滤与独占追加之后的基础配方列表
+     * @return 独占追加、数据包禁用之后的最终基础配方列表
      */
     public static List<RecipeHolder<?>> getBaseRecipes(HandMadeTool tool, Level level) {
         // level 为 null 时没有任何配方可查，但流程仍然走完，保持行为可预测。
@@ -96,8 +96,12 @@ public final class HandMadeRecipePool {
                     case INFUSION_GUN -> collectInfusionGun(level);
                 };
 
-        base = HandMadeRecipeFilters.apply(tool, base, level);
         base = HandMadeRecipeRegistry.appendExclusive(tool, base);
+
+        // L2：数据包过滤层。放在最后一步，所以连独占追加进来的配方也能被数据包禁用。
+        // 只影响本模组工具的读取 —— 被禁用的配方仍完整留在 RecipeManager 里，Create 机器照常可用。
+        base.removeIf(holder -> HandMadeRecipeFilters.isDisabled(tool, holder.id()));
+
         return base;
     }
 

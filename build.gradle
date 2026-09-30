@@ -40,6 +40,9 @@ repositories {
     // 必备：Create 和相关模组的 Maven
     maven { url = "https://maven.createmod.net" }
 
+    // KubeJS（Latvian 官方 maven）
+    maven { name = "Latvian"; url = "https://maven.latvian.dev/releases" }
+
     // CurseForge 备用
     maven {
         name = "CurseForge"
@@ -162,6 +165,10 @@ dependencies {
     // JEI
     compileOnly "mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}"
     localRuntime "mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}"
+
+    // KubeJS —— 仅编译期可见，不打包、不进入运行时类路径
+    // 注意：不要加 transitive = false —— KubeJS API 暴露 Rhino 类型，Rhino 必须在编译类路径上
+    compileOnly("dev.latvian.mods:kubejs-neoforge:${kubejs_version}")
 }
 
 // ------------------ 元数据生成 ------------------
