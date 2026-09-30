@@ -75,23 +75,29 @@ public class InfusionGunItem extends Item {
     // ================== 交互参数（方便调优） ==================
 
     /** 长按阈值：超过此 tick 数视为"长按"，走吸分支 */
-    private static final int LONG_PRESS_THRESHOLD = 4;
+    private static final int LONG_PRESS_THRESHOLD = 8;
 
-    /** 容器抽取：单次抽取量（mB） */
+    /** 容器抽取（潜行长按）：单次抽取量（mB） */
     private static final int EXTRACT_RATE_MB = 25;
 
-    /** 容器抽取：单次抽取间隔（tick） */
-    private static final int EXTRACT_INTERVAL_TICKS = 1;
+    /** 容器抽取（潜行长按）：单次抽取间隔（tick） */
+    private static final int EXTRACT_INTERVAL_TICKS = 8;
 
-    /** 音效播放间隔（tick）—— 与抽取间隔解耦 */
-    private static final int FILL_SOUND_INTERVAL_TICKS = 4;
+    /** 音效响度 */
+    private static final float FILL_SOUND_VOLUME = 0.7f;
 
     /** 流体方块：一整桶的量（mB） */
     private static final int FLUID_BLOCK_AMOUNT = 1000;
 
-    /** 流体方块吸取所需 tick 数（一次性完成） */
-    private static final int FLUID_BLOCK_PICKUP_TICKS =
-            FLUID_BLOCK_AMOUNT / EXTRACT_RATE_MB * EXTRACT_INTERVAL_TICKS;   // = 40 tick
+    /**
+     * 潜行吸流体方块所需 tick 数（一次性完成）。
+     *
+     * <p>独立硬编码 40，不再用
+     * {@code FLUID_BLOCK_AMOUNT / EXTRACT_RATE_MB * EXTRACT_INTERVAL_TICKS} 公式 ——
+     * {@code EXTRACT_INTERVAL_TICKS} 改成 4（潜行容器的抽取节奏）之后，
+     * 那条公式会算出 160，与实际想要的节奏无关。</p>
+     */
+    private static final int FLUID_BLOCK_PICKUP_TICKS = FLUID_BLOCK_AMOUNT / EXTRACT_RATE_MB * EXTRACT_INTERVAL_TICKS;
 
     // ================== 玩家状态 ==================
 
@@ -104,6 +110,12 @@ public class InfusionGunItem extends Item {
      * 用于配合 {@code usedTicks >= FLUID_BLOCK_PICKUP_TICKS} 的判定，保证只触发一次。
      */
     private static final Set<UUID> PICKUP_TRIGGERED = new HashSet<>();
+
+    /**
+     * 本次长按是否已经触发过"不潜行快速抽满容器"。
+     * 与 {@link #PICKUP_TRIGGERED} 同理，保证一次长按只抽一次。
+     */
+    private static final Set<UUID> EXTRACT_TRIGGERED = new HashSet<>();
 
     /**
      * 玩家在 onRightClickBlock 时保存的交互上下文。
@@ -218,36 +230,61 @@ public class InfusionGunItem extends Item {
         int usedTicks = getUseDuration(stack, entity) - remainingTicks;
         if (usedTicks < 3) return;
 
-        if (info.mode() == PressInfo.InteractionMode.CONTAINER) {
-            // ★ 每 EXTRACT_INTERVAL_TICKS tick 才真正抽一次
-            if (usedTicks % EXTRACT_INTERVAL_TICKS != 0) return;
-            tryExtractTick(level, info.pos(), player, stack, usedTicks);
+        boolean sneaking = player.isShiftKeyDown();
 
-        } else {
-            // FLUID_BLOCK 分支：播粒子 + 音效，到齐一次性吸
+        if (info.mode() == PressInfo.InteractionMode.CONTAINER) {
+            if (sneaking) {
+                // 潜行：每 EXTRACT_INTERVAL_TICKS tick 抽 25mB（慢速精确抽）
+                if (usedTicks % EXTRACT_INTERVAL_TICKS != 0) return;
+                tryExtractTick(level, info.pos(), player, stack);
+            } else {
+                // 不潜行：达到 LONG_PRESS_THRESHOLD 后每 EXTRACT_INTERVAL_TICKS tick 尝试一次抽满；
+                // 成功才置 flag 停止，失败则下个周期继续重试（例如枪内剩余空间不足时）
+                if (usedTicks >= LONG_PRESS_THRESHOLD
+                        && (usedTicks - LONG_PRESS_THRESHOLD) % EXTRACT_INTERVAL_TICKS == 0
+                        && !EXTRACT_TRIGGERED.contains(player.getUUID())) {
+                    if (tryExtractMax(level, info.pos(), player, stack)) {
+                        EXTRACT_TRIGGERED.add(player.getUUID());
+                    }
+                }
+            }
+        } else {  // FLUID_BLOCK
             FluidStack source = getFluidFromSource(level, info.pos());
 
-            // ★ 音效：源存在 + 长按阈值处首次触发，之后每 FILL_SOUND_INTERVAL_TICKS tick 一次
-            if (!source.isEmpty()
-                    && usedTicks >= LONG_PRESS_THRESHOLD
-                    && (usedTicks - LONG_PRESS_THRESHOLD) % FILL_SOUND_INTERVAL_TICKS == 0) {
-                level.playSound(null, player.blockPosition(),
-                        FluidHelper.getFillSound(source),
-                        SoundSource.PLAYERS, 0.4f, 1.0f);
-            }
-
-            // 粒子：保持不变（每 tick 播 3 个）
-            if (!source.isEmpty()) {
-                spawnPickupProgressParticles(level, player, info.pos(), source);
-            }
-
-            // ★ 到齐一次性吸取：用 >= 兼容"恰好跳过了 FLUID_BLOCK_PICKUP_TICKS 那一帧"的情况，
-            //   再用 PICKUP_TRIGGERED 去重，保证一次长按只吸一次；源已消失时不再触发。
-            if (usedTicks >= FLUID_BLOCK_PICKUP_TICKS
-                    && !source.isEmpty()
-                    && !PICKUP_TRIGGERED.contains(player.getUUID())) {
-                PICKUP_TRIGGERED.add(player.getUUID());
-                tryPickupFluidBlock(level, info.pos(), player, stack);
+            if (sneaking) {
+                // 潜行：保持 FLUID_BLOCK_PICKUP_TICKS(40) 一次性吸；音效 + 粒子按 EXTRACT_INTERVAL_TICKS 节奏播
+                if (!source.isEmpty() && usedTicks % EXTRACT_INTERVAL_TICKS == 0) {
+                    level.playSound(null, player.blockPosition(),
+                            FluidHelper.getFillSound(source),
+                            SoundSource.PLAYERS, FILL_SOUND_VOLUME, 1.0f);
+                }
+                if (!source.isEmpty()) {
+                    spawnPickupProgressParticles(level, player, info.pos(), source);
+                }
+                if (usedTicks >= FLUID_BLOCK_PICKUP_TICKS
+                        && !source.isEmpty()
+                        && !PICKUP_TRIGGERED.contains(player.getUUID())) {
+                    PICKUP_TRIGGERED.add(player.getUUID());
+                    tryPickupFluidBlock(level, info.pos(), player, stack);
+                }
+            } else {
+                // 不潜行：达到 LONG_PRESS_THRESHOLD 后每 EXTRACT_INTERVAL_TICKS tick 尝试一次立即吸；
+                // 成功才置 flag + 播音效/粒子，失败则下个周期继续重试
+                if (usedTicks >= LONG_PRESS_THRESHOLD
+                        && (usedTicks - LONG_PRESS_THRESHOLD) % EXTRACT_INTERVAL_TICKS == 0
+                        && !source.isEmpty()
+                        && !PICKUP_TRIGGERED.contains(player.getUUID())) {
+                    if (tryPickupFluidBlock(level, info.pos(), player, stack)) {
+                        PICKUP_TRIGGERED.add(player.getUUID());
+                        level.playSound(null, player.blockPosition(),
+                                FluidHelper.getFillSound(source),
+                                SoundSource.PLAYERS, FILL_SOUND_VOLUME, 1.0f);
+                        // 一批粒子（spawnPickupProgressParticles 每次 3 个，调 3 次 = 9 个）
+                        for (int i = 0; i < 3; i++) {
+                            spawnPickupProgressParticles(level, player, info.pos(), source);
+                        }
+                    }
+                }
             }
         }
     }
@@ -262,6 +299,7 @@ public class InfusionGunItem extends Item {
         PENDING_EXTRACT.remove(player.getUUID());
         EXTRACT_DAMAGED.remove(player.getUUID());
         PICKUP_TRIGGERED.remove(player.getUUID());
+        EXTRACT_TRIGGERED.remove(player.getUUID());
 
         PressInfo info = PRESSING.remove(player.getUUID());
         if (info == null) return;
@@ -294,7 +332,7 @@ public class InfusionGunItem extends Item {
 
     // ================== 抽取容器（累计判定，兼容整桶容器） ==================
 
-    private static void tryExtractTick(Level level, BlockPos pos, Player player, ItemStack gun, int usedTicks) {
+    private static void tryExtractTick(Level level, BlockPos pos, Player player, ItemStack gun) {
         IFluidHandler handler = level.getCapability(Capabilities.FluidHandler.BLOCK, pos, null);
         if (handler == null) return;
 
@@ -326,10 +364,11 @@ public class InfusionGunItem extends Item {
         //   炼药锅这类按整桶出入的容器，drain(25mB) 会返回空；若把音效放在 drain 之后，
         //   就会被下面 actual.isEmpty() 的提前 return 吃掉，玩家长按听不到任何声音，
         //   会误以为工具坏了。
-        if (usedTicks >= LONG_PRESS_THRESHOLD
-                && (usedTicks - LONG_PRESS_THRESHOLD) % FILL_SOUND_INTERVAL_TICKS == 0) {
+        // ★ 调用节奏已由 onUseTick 控制（潜行时每 EXTRACT_INTERVAL_TICKS tick 才调一次），
+        //   所以这里只要有流体就播，音效与抽取同步 —— 第一次抽取（usedTicks=4）就有声音。
+        if (!source.isEmpty()) {
             level.playSound(null, pos, FluidHelper.getFillSound(source),
-                    SoundSource.PLAYERS, 0.4f, 1.0f + level.random.nextFloat() * 0.2f);
+                    SoundSource.PLAYERS, FILL_SOUND_VOLUME, 1.0f + level.random.nextFloat() * 0.2f);
         }
 
         FluidStack actual = handler.drain(source.copyWithAmount(want), IFluidHandler.FluidAction.EXECUTE);
@@ -346,6 +385,53 @@ public class InfusionGunItem extends Item {
             damageGun(gun, player);
             EXTRACT_DAMAGED.put(player.getUUID(), true);
         }
+    }
+
+    /**
+     * 一次性抽满容器（不潜行长按用）。
+     *
+     * <p>与 {@link #tryExtractTick} 的区别：不做"每 tick 25mB"的累计，
+     * 直接按 {@code min(枪内剩余容量, 源剩余量)} 一次抽完，所以是瞬间完成。</p>
+     *
+     * <p>不维护 {@code PENDING_EXTRACT} / {@code EXTRACT_DAMAGED}：
+     * 抽一次就结束，扣一次耐久即可。</p>
+     *
+     * @return 真的抽到流体并写入枪内时为 true；任何前置检查失败或 drain 落空时为 false
+     *         （调用方据此决定是否置位 {@code EXTRACT_TRIGGERED}，失败则下个周期重试）
+     */
+    private static boolean tryExtractMax(Level level, BlockPos pos, Player player, ItemStack gun) {
+        IFluidHandler handler = level.getCapability(Capabilities.FluidHandler.BLOCK, pos, null);
+        if (handler == null) return false;
+
+        InfusionGunContents contents = getContents(gun);
+        if (contents.remaining() <= 0) return false;
+
+        FluidStack source = FluidStack.EMPTY;
+        for (int i = 0; i < handler.getTanks(); i++) {
+            FluidStack inTank = handler.getFluidInTank(i);
+            if (inTank.isEmpty()) continue;
+            if (!contents.isEmpty()
+                    && !FluidStack.isSameFluidSameComponents(contents.fluid(), inTank)) {
+                continue;
+            }
+            source = inTank;
+            break;
+        }
+        if (source.isEmpty()) return false;
+
+        int want = Math.min(contents.remaining(), source.getAmount());
+        if (want <= 0) return false;
+
+        FluidStack actual = handler.drain(source.copyWithAmount(want), IFluidHandler.FluidAction.EXECUTE);
+        if (actual.isEmpty()) return false;
+
+        setContents(gun, contents.withFill(actual));
+        damageGun(gun, player);
+
+        level.playSound(null, pos, FluidHelper.getFillSound(actual),
+                SoundSource.PLAYERS, FILL_SOUND_VOLUME, 1.0f + level.random.nextFloat() * 0.2f);
+
+        return true;
     }
 
     // ================== 吸取流体方块 ==================
@@ -699,6 +785,7 @@ public class InfusionGunItem extends Item {
         PENDING_EXTRACT.remove(uuid);
         EXTRACT_DAMAGED.remove(uuid);
         PICKUP_TRIGGERED.remove(uuid);
+        EXTRACT_TRIGGERED.remove(uuid);
     }
 
     // ================== Tooltip ==================
